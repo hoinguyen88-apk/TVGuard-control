@@ -8,9 +8,9 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * - TRẺ EM: ngân sách 20 phút/NGÀY (lưu bền, "hết giờ" được tính từ số phút đã xem nên khởi động lại không cấp lại giờ).
- * - GIA ĐÌNH: một phiên có thời lượng riêng (0 = không giới hạn). Hết phiên -> tự về TRẺ EM.
- * - Qua ngày mới: đặt lại bộ đếm và về TRẺ EM.
+ * TRẺ EM: mỗi LƯỢT xem 60 phút (chỉnh được), hết lượt thì NGHỈ 60 phút (chỉnh được) rồi mới xem tiếp.
+ * Mọi thứ lưu bền và tính theo giờ thực nên tắt/bật/khởi động lại TV không được cấp lại giờ.
+ * GIA ĐÌNH: nhập PIN, không giới hạn (hoặc hẹn giờ). Hết hẹn giờ / tắt TV -> về TRẺ EM.
  */
 object Prefs {
     private fun sp(c: Context) =
@@ -46,43 +46,74 @@ object Prefs {
     fun kids(c: Context) = sp(c).getBoolean("kids", true)
     fun setKids(c: Context, v: Boolean) { sp(c).edit().putBoolean("kids", v).apply() }
 
-    /** Qua ngày mới: reset. Dùng max(giờ hiện tại, mốc giờ lớn nhất từng thấy) nên chỉnh lùi đồng hồ không reset được. */
+    /** Giờ "hiệu lực": không bao giờ lùi lại, nên chỉnh lùi đồng hồ TV không rút ngắn được thời gian nghỉ. */
+    private fun effNow(c: Context): Long =
+        maxOf(System.currentTimeMillis(), sp(c).getLong("lastWall", 0L))
+
+    /** Gọi định kỳ: hết giờ nghỉ -> bắt đầu lượt mới; sang ngày mới -> kết thúc phiên Gia đình. */
     fun sync(c: Context) {
         val s = sp(c)
-        val now = System.currentTimeMillis()
-        val lastWall = s.getLong("lastWall", 0L)
-        val eff = maxOf(now, lastWall)
+        val eff = effNow(c)
+        val e = s.edit()
+        var dirty = false
+        if (eff - s.getLong("lastWall", 0L) >= 30_000L) { e.putLong("lastWall", eff); dirty = true }
+        val rest = s.getLong("restUntil", 0L)
+        if (rest > 0 && eff >= rest) {
+            e.putLong("used_kids", 0).putInt("sess_total", 0).putLong("restUntil", 0)
+            dirty = true
+        }
         val today = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(eff))
         val oldDay = s.getString("day", null)
         if (oldDay != today) {
-            val e = s.edit().putString("day", today).putLong("lastWall", eff)
-                .putLong("fam_used", 0).putInt("fam_limit", 0)
-            if (s.getBoolean("daily", true)) e.putLong("used_kids", 0).putInt("bonus_kids", 0)
+            e.putString("day", today).putLong("fam_used", 0).putInt("fam_limit", 0)
             if (oldDay != null) e.putBoolean("kids", true)
-            e.apply()
-        } else if (eff - lastWall >= 30_000L) {
-            s.edit().putLong("lastWall", eff).apply()
+            dirty = true
+        }
+        if (dirty) e.apply()
+    }
+
+    // ---- Lượt xem & giờ nghỉ của trẻ em ----
+    fun limitKids(c: Context) = sp(c).getInt("limit_kids", 60)
+    fun setLimitKids(c: Context, v: Int) { sp(c).edit().putInt("limit_kids", v.coerceIn(5, 240)).apply() }
+    fun restMin(c: Context) = sp(c).getInt("rest_min", 60)
+    fun setRestMin(c: Context, v: Int) { sp(c).edit().putInt("rest_min", v.coerceIn(5, 480)).apply() }
+
+    fun usedKidsMs(c: Context) = sp(c).getLong("used_kids", 0)
+    fun kidsTotalMin(c: Context): Int {
+        val t = sp(c).getInt("sess_total", 0)
+        return if (t > 0) t else limitKids(c)
+    }
+
+    private fun restUntil(c: Context) = sp(c).getLong("restUntil", 0L)
+    fun resting(c: Context) = restUntil(c) > 0 && effNow(c) < restUntil(c)
+    fun restLeftMs(c: Context) = maxOf(0L, restUntil(c) - effNow(c))
+    fun startRest(c: Context) {
+        sp(c).edit().putLong("restUntil", effNow(c) + restMin(c) * 60_000L).apply()
+    }
+
+    /** Bắt đầu lượt mới ngay (đầy giờ). */
+    fun newSession(c: Context) {
+        sp(c).edit().putLong("used_kids", 0).putInt("sess_total", 0).putLong("restUntil", 0).apply()
+    }
+
+    /** Người lớn cấp thêm m phút: đang nghỉ -> cho xem tiếp m phút; đang xem -> cộng thêm m phút. */
+    fun grant(c: Context, m: Int) {
+        if (restUntil(c) > 0) {
+            sp(c).edit().putLong("used_kids", 0).putInt("sess_total", m).putLong("restUntil", 0).apply()
+        } else {
+            sp(c).edit().putInt("sess_total", kidsTotalMin(c) + m).apply()
         }
     }
 
-    // ---- Ngân sách trẻ em ----
-    fun limitKids(c: Context) = sp(c).getInt("limit_kids", 20)
-    fun setLimitKids(c: Context, v: Int) { sp(c).edit().putInt("limit_kids", v.coerceIn(5, 180)).apply() }
-    fun usedKidsMs(c: Context) = sp(c).getLong("used_kids", 0)
-    fun bonusKidsMin(c: Context) = sp(c).getInt("bonus_kids", 0)
-    fun addKidsBonus(c: Context, m: Int) {
-        sp(c).edit().putInt("bonus_kids", bonusKidsMin(c) + m).apply()
-    }
-    fun resetKidsToday(c: Context) {
-        sp(c).edit().putLong("used_kids", 0).putInt("bonus_kids", 0).apply()
-    }
-    fun kidsTotalMin(c: Context) = limitKids(c) + bonusKidsMin(c)
-
-    /** Chỉ "hết giờ" khi đang ở chế độ trẻ em và đã xem đủ. */
+    /** Lượt xem của trẻ đã đủ nhưng chưa bắt đầu nghỉ. */
     fun exhausted(c: Context, extraMs: Long = 0L): Boolean =
-        hasPin(c) && kids(c) && usedKidsMs(c) + extraMs >= kidsTotalMin(c) * 60_000L
+        hasPin(c) && kids(c) && restUntil(c) == 0L &&
+            usedKidsMs(c) + extraMs >= kidsTotalMin(c) * 60_000L
 
-    // ---- Phiên cả nhà ----
+    /** Đang trong giờ nghỉ (tivi bị khoá). */
+    fun locked(c: Context): Boolean = hasPin(c) && kids(c) && resting(c)
+
+    // ---- Phiên Gia đình ----
     fun familyLimitMin(c: Context) = sp(c).getInt("fam_limit", 0)
     fun famUsedMs(c: Context) = sp(c).getLong("fam_used", 0)
     fun startFamily(c: Context, minutes: Int) {
@@ -103,7 +134,7 @@ object Prefs {
     // ---- Khoá Internet ----
     fun manualNet(c: Context) = sp(c).getBoolean("manualNet", false)
     fun setManualNet(c: Context, v: Boolean) { sp(c).edit().putBoolean("manualNet", v).apply() }
-    fun netBlocked(c: Context) = hasPin(c) && (manualNet(c) || exhausted(c))
+    fun netBlocked(c: Context) = hasPin(c) && (manualNet(c) || locked(c))
 
     // ---- Ghép đôi với điện thoại ----
     fun pairCode(c: Context): String {
@@ -119,10 +150,6 @@ object Prefs {
     }
     fun lastCmdTs(c: Context) = sp(c).getLong("lastCmd", 0)
     fun setLastCmdTs(c: Context, t: Long) { sp(c).edit().putLong("lastCmd", t).apply() }
-
-    // ---- Tự cấp lại lượt trẻ em mỗi ngày (mặc định bật) ----
-    fun dailyRefresh(c: Context) = sp(c).getBoolean("daily", true)
-    fun setDailyRefresh(c: Context, v: Boolean) { sp(c).edit().putBoolean("daily", v).apply() }
 
     // ---- Nhận biết TV vừa khởi động lại ----
     fun lastBoot(c: Context) = sp(c).getInt("lastBoot", -2)

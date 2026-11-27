@@ -1,20 +1,23 @@
-# TV Guard v3 – TV + điện thoại người lớn
+# TV Guard v4 – TV + điện thoại người lớn
 
 ## Cách hoạt động
 - Mỗi lần BẬT tivi (khởi động lại, hoặc tắt chờ rồi bật) luôn ở chế độ TRẺ EM.
-- TRẺ EM: mỗi lượt 20 phút. Hết lượt -> CHỈ NGẮT INTERNET (VPN hố đen), không khoá màn hình.
-  Tắt/bật/khởi động lại vẫn bị ngắt, không tự được cấp lại. Muốn xem tiếp: người lớn cấp thêm 20 phút
-  (điện thoại, hoặc app TV Guard trên tivi + PIN). Sang ngày mới tự có lượt mới (có thể tắt trong Cài đặt).
-- GIA ĐÌNH: phải nhập PIN để vào, xem không giới hạn (hoặc đặt 30/60/120 phút rồi tự về Trẻ em).
+- TRẺ EM: mỗi lượt xem 60 phút (chỉnh 5–240). Hết lượt -> tivi NGHỈ 60 phút (chỉnh 5–480):
+  hiện màn hình nghỉ có đồng hồ đếm ngược, ngắt Internet (VPN hố đen) và thử tắt màn hình (tuỳ tivi có hỗ trợ).
+  Hết giờ nghỉ tự bắt đầu lượt mới.
+- Tắt/bật/khởi động lại tivi KHÔNG làm giờ nghỉ hết sớm: giờ nghỉ tính theo giờ thực và được lưu bền.
+- Người lớn có thể: cho xem tiếp 20 phút, bắt đầu lượt mới, chuyển sang GIA ĐÌNH (nhập PIN) – từ điện thoại hoặc trên tivi.
+- GIA ĐÌNH: nhập PIN để vào, xem không giới hạn (hoặc hẹn 30/60/120 phút rồi tự về TRẺ EM).
   Tắt tivi hoặc khởi động lại -> tự về TRẺ EM.
-- Vào Cài đặt hệ thống / cài app đều phải nhập PIN. PIN hiện ●●●● và chặn chụp màn hình.
+- Vào Cài đặt hệ thống / cài app đều phải nhập PIN. PIN hiện ● ○ (không lộ số), chặn chụp/ghi màn hình.
+- Lưu ý: app không thể ngắt nguồn tivi thật sự. "Tivi tắt" = màn hình nghỉ + ngắt mạng + thử khoá màn hình.
 
 ## Chuyển chế độ dễ dàng
 Bằng remote:
   - Mở app TV Guard (nên ghim lên hàng ứng dụng ở màn hình chính), hoặc
-  - Bấm GIỮ phím Menu (☰) khoảng 1,5 giây, hoặc phím Đỏ / Settings nếu remote có.
-  Màn hình chính có nút to: "Chuyển sang GIA ĐÌNH (nhập PIN)", "Cấp thêm 20 phút (nhập PIN)", "Về TRẺ EM" (không cần PIN).
-Bằng điện thoại: app TV Guard Phụ huynh có nút Chế độ TRẺ EM / GIA ĐÌNH (✅ cho biết đang ở chế độ nào).
+  - Bấm GIỮ phím Menu (☰) khoảng 1,5 giây (hoặc phím Đỏ / Settings nếu remote có).
+  Màn hình chính có 3 nút to: Chế độ TRẺ EM (không cần PIN), Chế độ GIA ĐÌNH (nhập PIN), Cài đặt phụ huynh (nhập PIN).
+Bằng điện thoại: app TV Guard Phụ huynh có 2 nút Trẻ em / Gia đình (nút đang dùng có màu xanh).
   Về TRẺ EM không cần PIN; sang GIA ĐÌNH và các lệnh khác cần PIN quản trị.
 
 ## 0. Build bằng GitHub Actions (không cần Android Studio)

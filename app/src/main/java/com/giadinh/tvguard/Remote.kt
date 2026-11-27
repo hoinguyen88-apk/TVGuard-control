@@ -64,10 +64,11 @@ class Remote(private val ctx: Context) {
         else {
             ok = true
             when (cmd) {
-                "grant" -> Prefs.addKidsBonus(ctx, j.optInt("m", 20).coerceIn(1, 240))
+                "grant" -> Prefs.grant(ctx, j.optInt("m", 20).coerceIn(1, 240))
                 "family" -> Prefs.startFamily(ctx, j.optInt("m", 0).coerceIn(0, 720))
                 "kids" -> Prefs.endFamily(ctx)
-                "limit" -> Prefs.setLimitKids(ctx, j.optInt("m", 20))
+                "limit" -> Prefs.setLimitKids(ctx, j.optInt("m", 60))
+                "rest" -> Prefs.setRestMin(ctx, j.optInt("m", 60))
                 "net" -> Prefs.setManualNet(ctx, j.optBoolean("block"))
                 "setpin" -> {
                     val n = j.optString("new")
@@ -86,7 +87,9 @@ class Remote(private val ctx: Context) {
         return JSONObject()
             .put("ts", System.currentTimeMillis())
             .put("kids", Prefs.kids(ctx))
-            .put("locked", Prefs.exhausted(ctx))
+            .put("locked", Prefs.locked(ctx))
+            .put("restLeftSec", Prefs.restLeftMs(ctx) / 1000)
+            .put("restMin", Prefs.restMin(ctx))
             .put("net", NetBlockService.running)
             .put("manualNet", Prefs.manualNet(ctx))
             .put("vpnOk", VpnService.prepare(ctx) == null)

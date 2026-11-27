@@ -20,16 +20,12 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 
 /**
- * Màn hình chính (không cần PIN để xem): chọn chế độ bằng remote.
- *  - Đang TRẺ EM: "Chuyển sang GIA ĐÌNH" cần PIN -> xem không giới hạn.
- *  - Đang GIA ĐÌNH: "Về TRẺ EM" không cần PIN.
- * Cài đặt nâng cao luôn cần PIN.
+ * Màn hình chính trên TV: bên trái là thẻ trạng thái, bên phải là các nút lớn điều khiển bằng remote.
+ *  - TRẺ EM: không cần PIN.   - GIA ĐÌNH: nhập PIN.   - Cài đặt phụ huynh: nhập PIN.
  */
 class MainActivity : Activity() {
-    private var screen = "home"          // home | pin | settings | pairing
-    private var pinTitle = ""
-    private var after: (() -> Unit)? = null
-    private var authedUntil = 0L
+    private var screen = "home" // home | pinFamily | pinSettings | settings | pairing
+    private var authed = false
     private var changingPin = false
     private var first: String? = null
     private var msg = ""
@@ -45,21 +41,11 @@ class MainActivity : Activity() {
         show()
     }
 
-    private fun page(vararg views: View): ScrollView {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(48), dp(24), dp(48), dp(24))
-        }
-        views.forEach {
-            col.addView(it, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        }
-        return ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#111827"))
-            addView(col)
-        }
+    override fun onBackPressed() {
+        if (screen != "home" || changingPin) { changingPin = false; home() } else super.onBackPressed()
     }
+
+    private fun home() { screen = "home"; msg = ""; show() }
 
     private fun qr(text: String): Bitmap {
         val size = 480
@@ -71,181 +57,269 @@ class MainActivity : Activity() {
         return b
     }
 
-    private fun requirePin(title: String, action: () -> Unit) {
-        pinTitle = title
-        after = action
-        msg = ""
-        screen = "pin"
-        show()
+    private fun column(): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.gravity = Gravity.CENTER
+        c.setBackgroundColor(Pal.BG)
+        c.setPadding(dp(32), dp(24), dp(32), dp(24))
+        return c
+    }
+
+    private fun row(): LinearLayout {
+        val r = LinearLayout(this)
+        r.orientation = LinearLayout.HORIZONTAL
+        r.setBackgroundColor(Pal.BG)
+        r.setPadding(dp(48), dp(32), dp(48), dp(32))
+        return r
     }
 
     private fun show() {
         Prefs.sync(this)
-        if (screen == "settings" && System.currentTimeMillis() > authedUntil) screen = "home"
-        when {
-            !Prefs.hasPin(this) || changingPin -> setContentView(page(
-                label("Tạo mã PIN phụ huynh (4–8 số)", 26f),
-                label(msg, 18f),
-                pinPad { p ->
-                    if (first == null) {
-                        first = p
-                        msg = "Nhập lại mã PIN để xác nhận"
-                    } else if (first == p) {
-                        Prefs.setPin(this, p)
-                        changingPin = false
-                        first = null
-                        msg = ""
-                    } else {
-                        first = null
-                        msg = "Không khớp, nhập lại từ đầu"
-                    }
-                    show()
-                }
-            ))
-            screen == "pin" -> setContentView(page(
-                label(pinTitle, 26f),
-                label(msg, 18f),
-                pinPad { p ->
-                    if (Prefs.banSeconds(this) > 0) {
-                        msg = "Thử lại sau ${Prefs.banSeconds(this)} giây"
-                    } else if (Prefs.checkPin(this, p)) {
-                        val a = after
-                        after = null
-                        screen = "home"
-                        msg = ""
-                        a?.invoke()
-                    } else {
-                        msg = if (Prefs.banSeconds(this) > 0) "Sai quá nhiều, đợi 60 giây" else "Sai mã PIN"
-                    }
-                    show()
-                },
-                btn("Huỷ") { after = null; screen = "home"; msg = ""; show() }
-            ))
-            screen == "pairing" -> showPairing()
-            screen == "settings" -> showSettings()
-            else -> showHome()
+        if (authed && System.currentTimeMillis() > Prefs.settingsUntil(this)) {
+            authed = false
+            if (screen == "settings" || screen == "pairing") screen = "home"
         }
-    }
-
-    private fun statusText(): String {
-        val kids = Prefs.kids(this)
-        val fl = Prefs.familyLimitMin(this)
-        val net = if (NetBlockService.running) "\nInternet: ĐANG NGẮT (hết giờ)" else ""
-        return if (kids) {
-            val total = Prefs.kidsTotalMin(this)
-            val used = Prefs.usedKidsMs(this) / 60_000
-            "Chế độ: TRẺ EM\nĐã xem $used/$total phút" +
-                (if (Prefs.exhausted(this)) " – HẾT GIỜ" else " (còn ${maxOf(0, total - used)} phút)") + net
-        } else {
-            "Chế độ: GIA ĐÌNH – " + (if (fl == 0) "không giới hạn" else "đã dùng ${Prefs.famUsedMs(this) / 60_000}/$fl phút") + net
-        }
-    }
-
-    private fun showHome() {
-        val kids = Prefs.kids(this)
-        val views = ArrayList<View>()
-        views.add(label("📺 TV Guard", 32f))
-        views.add(label(statusText(), 22f))
-        if (msg.isNotEmpty()) views.add(label(msg, 18f))
-        if (kids) {
-            views.add(btn("👨‍👩‍👧 Chuyển sang chế độ GIA ĐÌNH (nhập PIN – không giới hạn)") {
-                requirePin("Nhập mã PIN để chuyển sang chế độ Gia đình") {
-                    Prefs.startFamily(this, 0)
-                    msg = "✅ Đã chuyển sang chế độ Gia đình"
-                }
-            })
-            views.add(btn("➕ Cấp thêm 20 phút cho trẻ (nhập PIN)") {
-                requirePin("Nhập mã PIN để cấp thêm 20 phút") {
-                    Prefs.addKidsBonus(this, 20)
-                    msg = "✅ Đã cấp thêm 20 phút"
-                }
-            })
-        } else {
-            views.add(btn("🧒 Về chế độ TRẺ EM") { Prefs.endFamily(this); msg = "Đã về chế độ Trẻ em"; show() })
-        }
-        views.add(btn("⚙ Cài đặt phụ huynh (nhập PIN)") {
-            requirePin("Nhập mã PIN để vào Cài đặt") {
-                authedUntil = System.currentTimeMillis() + 10 * 60_000L
-                screen = "settings"
+        if (!Prefs.hasPin(this) || changingPin) { setContentView(pinSetup()); return }
+        val v: View = when (screen) {
+            "pinFamily" -> verify("🏠  Vào chế độ GIA ĐÌNH", "Nhập mã PIN để xem không giới hạn") {
+                Prefs.startFamily(this, 0); home()
             }
-        })
-        views.add(btn("Thoát") { finish() })
-        setContentView(page(*views.toTypedArray()))
+            "pinSettings" -> verify("⚙  Cài đặt phụ huynh", "Nhập mã PIN phụ huynh") {
+                authed = true; screen = "settings"; show()
+            }
+            "pairing" -> if (authed) pairingView() else homeView()
+            "settings" -> if (authed) settingsView() else homeView()
+            else -> homeView()
+        }
+        setContentView(v)
     }
 
-    private fun showPairing() {
-        val code = Prefs.pairCode(this)
-        setContentView(page(
-            label("Ghép đôi với điện thoại người lớn", 26f),
-            label("Mở ứng dụng TV Guard trên điện thoại > Quét mã QR (hoặc nhập mã bên dưới).\nKhông chia sẻ mã này cho trẻ.", 18f),
-            ImageView(this).apply { setImageBitmap(qr(code)); setPadding(0, dp(12), 0, dp(12)) },
-            label(Proto.pretty(code), 18f),
-            btn("Tạo mã mới (huỷ ghép đôi cũ)") { Prefs.resetPair(this); show() },
-            btn("Quay lại") { screen = "settings"; show() }
-        ))
+    // ---------- Tạo PIN ----------
+    private fun pinSetup(): View {
+        val col = column()
+        col.add(txt("Tạo mã PIN phụ huynh", 32f, Pal.TEXT, true, Gravity.CENTER))
+        col.add(txt(
+            if (first == null) "Đặt mã 4–8 chữ số. Đừng cho trẻ biết mã này." else "Nhập lại mã PIN để xác nhận",
+            18f, Pal.MUTED, false, Gravity.CENTER), top = 6)
+        col.add(txt(msg, 18f, Pal.RED, false, Gravity.CENTER), top = 6)
+        col.add(pinPad { p ->
+            if (first == null) {
+                first = p
+                msg = ""
+            } else if (first == p) {
+                Prefs.setPin(this, p)
+                authed = changingPin
+                screen = if (changingPin) "settings" else "home"
+                changingPin = false
+                first = null
+                msg = ""
+            } else {
+                first = null
+                msg = "Hai lần nhập không khớp, thử lại từ đầu"
+            }
+            show()
+        }, top = 10)
+        return col
     }
 
-    private fun showSettings() {
+    // ---------- Nhập PIN xác nhận ----------
+    private fun verify(title: String, sub: String, onOk: () -> Unit): View {
+        val col = column()
+        col.add(txt(title, 32f, Pal.TEXT, true, Gravity.CENTER))
+        col.add(txt(sub, 18f, Pal.MUTED, false, Gravity.CENTER), top = 6)
+        col.add(txt(msg, 18f, Pal.RED, false, Gravity.CENTER), top = 6)
+        col.add(pinPad { p ->
+            if (Prefs.banSeconds(this) > 0) {
+                msg = "Thử lại sau ${Prefs.banSeconds(this)} giây"
+                show()
+            } else if (Prefs.checkPin(this, p)) {
+                msg = ""
+                onOk()
+            } else {
+                msg = if (Prefs.banSeconds(this) > 0) "Sai quá nhiều, đợi 60 giây" else "Sai mã PIN"
+                show()
+            }
+        }, top = 10)
+        col.add(btn("Quay lại", Kind.GHOST) { home() }, w = dp(360), top = 14)
+        return col
+    }
+
+    // ---------- Màn hình chính ----------
+    private fun homeView(): View {
+        val kids = Prefs.kids(this)
+        val root = row()
+
+        val card = card(32)
+        card.add(txt("TV Guard", 20f, Pal.MUTED, true))
+        card.add(chip(if (kids) "🧒  CHẾ ĐỘ TRẺ EM" else "🏠  CHẾ ĐỘ GIA ĐÌNH", if (kids) Pal.BLUE else Pal.AMBER), w = WRAP, top = 14)
+        if (kids) {
+            val total = Prefs.kidsTotalMin(this)
+            val used = Prefs.usedKidsMs(this)
+            val leftMin = maxOf(0L, (total * 60_000L - used + 59_999L) / 60_000L)
+            val frac = used.toFloat() / (total * 60_000f)
+            card.add(txt("Còn $leftMin phút", 52f, Pal.TEXT, true), top = 20)
+            card.add(txt("Đã xem ${used / 60_000} / $total phút trong lượt này", 18f, Pal.MUTED), top = 4)
+            card.add(progress(frac, if (frac > 0.85f) Pal.AMBER else Pal.GREEN), h = dp(14), top = 16)
+            card.add(txt("Hết lượt, tivi nghỉ ${Prefs.restMin(this)} phút rồi mới xem tiếp.", 16f, Pal.MUTED), top = 14)
+        } else {
+            val fl = Prefs.familyLimitMin(this)
+            if (fl == 0) {
+                card.add(txt("Không giới hạn", 46f, Pal.TEXT, true), top = 20)
+                card.add(txt("Xem thoải mái. Tắt rồi bật lại tivi sẽ về chế độ Trẻ em.", 18f, Pal.MUTED), top = 4)
+            } else {
+                val used = Prefs.famUsedMs(this)
+                val left = maxOf(0L, (fl * 60_000L - used + 59_999L) / 60_000L)
+                card.add(txt("Còn $left phút", 52f, Pal.TEXT, true), top = 20)
+                card.add(txt("Hết hẹn giờ sẽ tự về chế độ Trẻ em.", 18f, Pal.MUTED), top = 4)
+                card.add(progress(used.toFloat() / (fl * 60_000f), Pal.AMBER), h = dp(14), top = 16)
+            }
+        }
+        val net = NetBlockService.running
+        card.add(chip(if (net) "🌐  Internet: đã ngắt" else "🌐  Internet: đang mở", if (net) Pal.RED else Pal.GREEN), w = WRAP, top = 22)
+        root.add(card, w = 0, h = MATCH, weight = 1.1f)
+
+        val right = LinearLayout(this)
+        right.orientation = LinearLayout.VERTICAL
+        right.gravity = Gravity.CENTER_VERTICAL
+        right.setPadding(dp(40), 0, 0, 0)
+        right.add(txt("Chọn chế độ", 26f, Pal.TEXT, true))
+        right.add(btn((if (kids) "✓  " else "") + "🧒  Chế độ TRẺ EM", if (kids) Kind.PRIMARY else Kind.SECONDARY) {
+            Prefs.endFamily(this); show()
+        }, top = 16)
+        right.add(btn((if (!kids) "✓  " else "") + "🏠  Chế độ GIA ĐÌNH  (nhập PIN)", if (!kids) Kind.PRIMARY else Kind.SECONDARY) {
+            screen = "pinFamily"; msg = ""; show()
+        }, top = 12)
+        right.add(btn("⚙  Cài đặt phụ huynh  (nhập PIN)", Kind.GHOST) {
+            screen = "pinSettings"; msg = ""; show()
+        }, top = 12)
+        right.add(txt("Mẹo: bấm giữ phím Menu (☰) trên remote để mở nhanh màn hình này.", 15f, Pal.MUTED), top = 18)
+        root.add(right, w = 0, h = MATCH, weight = 1f)
+        return root
+    }
+
+    // ---------- Cài đặt phụ huynh ----------
+    private fun stepRow(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit): LinearLayout {
+        val r = LinearLayout(this)
+        r.orientation = LinearLayout.HORIZONTAL
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.background = shape(Pal.CARD, 16, Pal.STROKE, 1)
+        r.setPadding(dp(20), dp(10), dp(12), dp(10))
+        r.add(txt(label, 20f, Pal.TEXT, true), w = 0, weight = 1f)
+        r.add(btn("−", Kind.SECONDARY, 0, onMinus), w = dp(64))
+        r.add(txt(value, 20f, Pal.TEXT, true, Gravity.CENTER), w = dp(120))
+        r.add(btn("+", Kind.SECONDARY, 0, onPlus), w = dp(64))
+        return r
+    }
+
+    private fun permRow(label: String, ok: Boolean, action: () -> Unit): LinearLayout {
+        val r = LinearLayout(this)
+        r.orientation = LinearLayout.HORIZONTAL
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.add(txt(label, 18f, Pal.TEXT, true), w = 0, weight = 1f)
+        if (ok) r.add(chip("✓ Đã cấp", Pal.GREEN), w = WRAP)
+        else r.add(btn("Cấp quyền", Kind.PRIMARY, 16, action), w = WRAP)
+        return r
+    }
+
+    private fun trySettings(i: Intent, fail: String) {
+        try { startActivity(i) } catch (e: ActivityNotFoundException) { msg = fail; show() }
+    }
+
+    private fun settingsView(): View {
         Prefs.setSettingsUntil(this, System.currentTimeMillis() + 10 * 60_000L)
-        val kl = Prefs.limitKids(this)
+        val kids = Prefs.kids(this)
+        val limit = Prefs.limitKids(this)
+        val restMin = Prefs.restMin(this)
         val accOn = (Settings.Secure.getString(
             contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains(packageName)
         val overlayOn = Settings.canDrawOverlays(this)
         val vpnOn = VpnService.prepare(this) == null
 
-        setContentView(page(
-            label("TV Guard – Cài đặt phụ huynh", 28f),
-            label(
-                statusText() +
-                    "\nTrợ năng: " + (if (accOn) "BẬT ✅" else "CHƯA ❌") +
-                    "  |  Hiển thị: " + (if (overlayOn) "CÓ ✅" else "CHƯA ❌") +
-                    "  |  VPN: " + (if (vpnOn) "CÓ ✅" else "CHƯA ❌") +
-                    (if (msg.isNotEmpty()) "\n$msg" else ""),
-                20f
-            ),
-            btn("Gia đình: 30 phút rồi tự về Trẻ em") { Prefs.startFamily(this, 30); show() },
-            btn("Gia đình: 60 phút rồi tự về Trẻ em") { Prefs.startFamily(this, 60); show() },
-            btn("Gia đình: 120 phút rồi tự về Trẻ em") { Prefs.startFamily(this, 120); show() },
-            btn("Gia đình: không giới hạn") { Prefs.startFamily(this, 0); show() },
-            btn("Về chế độ TRẺ EM") { Prefs.endFamily(this); show() },
-            btn("Trẻ em: giảm 5 phút mỗi lượt (hiện $kl)") { Prefs.setLimitKids(this, kl - 5); show() },
-            btn("Trẻ em: tăng 5 phút mỗi lượt (hiện $kl)") { Prefs.setLimitKids(this, kl + 5); show() },
-            btn("Cấp thêm 20 phút cho trẻ") { Prefs.addKidsBonus(this, 20); show() },
-            btn("Đặt lại bộ đếm trẻ em") { Prefs.resetKidsToday(this); show() },
-            btn("Tự cấp lại lượt mỗi ngày: " + (if (Prefs.dailyRefresh(this)) "BẬT" else "TẮT")) {
-                Prefs.setDailyRefresh(this, !Prefs.dailyRefresh(this)); show()
-            },
-            btn(if (Prefs.manualNet(this)) "Mở lại Internet" else "Ngắt Internet ngay") {
-                Prefs.setManualNet(this, !Prefs.manualNet(this)); show()
-            },
-            btn("Ghép đôi với điện thoại (mã QR)") { screen = "pairing"; show() },
-            btn("Đổi mã PIN") { changingPin = true; first = null; msg = ""; show() },
-            btn("Cấp quyền VPN (để ngắt Internet)") {
-                val i = VpnService.prepare(this)
-                if (i != null) startActivityForResult(i, 7) else { msg = "VPN đã được cấp quyền ✅"; show() }
-            },
-            btn("Bật dịch vụ Trợ năng TV Guard") {
-                try {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                } catch (e: ActivityNotFoundException) {
-                    msg = "Không mở được, hãy dùng lệnh adb (xem hướng dẫn)"; show()
-                }
-            },
-            btn("Cấp quyền hiển thị trên ứng dụng khác") {
-                try {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")))
-                } catch (e: ActivityNotFoundException) {
-                    msg = "Tivi không có màn hình này, hãy dùng lệnh adb (xem hướng dẫn)"; show()
-                }
-            },
-            btn("Xong – về màn hình chính") {
-                screen = "home"
-                authedUntil = 0
-                Prefs.setSettingsUntil(this, 0)
-                msg = ""
-                show()
-            }
-        ))
+        val root = row()
+        val left = card(28)
+        left.add(txt("Cài đặt phụ huynh", 28f, Pal.TEXT, true))
+        left.add(chip(if (kids) "🧒  Đang ở chế độ Trẻ em" else "🏠  Đang ở chế độ Gia đình", if (kids) Pal.BLUE else Pal.AMBER), w = WRAP, top = 14)
+        left.add(txt(
+            "Lượt xem: ${Prefs.usedKidsMs(this) / 60_000} / ${Prefs.kidsTotalMin(this)} phút" +
+                "\nMỗi lượt $limit phút · nghỉ $restMin phút" +
+                "\nInternet: " + (if (NetBlockService.running) "đang ngắt" else "đang mở"),
+            18f, Pal.MUTED), top = 16)
+        if (msg.isNotEmpty()) left.add(txt(msg, 16f, Pal.AMBER), top = 10)
+        left.add(txt("QUYỀN CẦN CẤP", 14f, Pal.MUTED, true), top = 22)
+        left.add(permRow("Trợ năng", accOn) {
+            trySettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), "Không mở được Trợ năng, hãy dùng atvTools hoặc adb")
+        }, top = 8)
+        left.add(permRow("Hiển thị trên ứng dụng khác", overlayOn) {
+            trySettings(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+                "Tivi không có màn hình này, hãy dùng atvTools hoặc adb")
+        }, top = 8)
+        left.add(permRow("VPN (để ngắt Internet)", vpnOn) {
+            val i = VpnService.prepare(this)
+            if (i != null) startActivityForResult(i, 7) else show()
+        }, top = 8)
+        root.add(left, w = 0, h = MATCH, weight = 1f)
+
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        list.setPadding(dp(32), 0, dp(8), dp(24))
+        list.add(txt("THỜI GIAN", 14f, Pal.MUTED, true))
+        list.add(stepRow("Mỗi lượt xem", "$limit phút",
+            { Prefs.setLimitKids(this, limit - 15); show() },
+            { Prefs.setLimitKids(this, limit + 15); show() }), top = 8)
+        list.add(stepRow("Nghỉ giữa các lượt", "$restMin phút",
+            { Prefs.setRestMin(this, restMin - 15); show() },
+            { Prefs.setRestMin(this, restMin + 15); show() }), top = 10)
+        list.add(btn("▶  Cho xem thêm 20 phút", Kind.PRIMARY) { Prefs.grant(this, 20); show() }, top = 10)
+        list.add(btn("↺  Bắt đầu lượt mới (đặt lại bộ đếm)") { Prefs.newSession(this); show() }, top = 10)
+        list.add(txt("CHẾ ĐỘ", 14f, Pal.MUTED, true), top = 22)
+        list.add(btn("🏠  Gia đình – hẹn giờ 60 phút") { Prefs.startFamily(this, 60); show() }, top = 8)
+        list.add(btn("🏠  Gia đình – không giới hạn") { Prefs.startFamily(this, 0); show() }, top = 10)
+        list.add(btn("🧒  Về chế độ Trẻ em") { Prefs.endFamily(this); show() }, top = 10)
+        list.add(txt("INTERNET", 14f, Pal.MUTED, true), top = 22)
+        list.add(btn(if (Prefs.manualNet(this)) "🌐  Mở lại Internet" else "🚫  Ngắt Internet ngay") {
+            Prefs.setManualNet(this, !Prefs.manualNet(this)); show()
+        }, top = 8)
+        list.add(txt("KẾT NỐI & BẢO MẬT", 14f, Pal.MUTED, true), top = 22)
+        list.add(btn("📱  Ghép đôi với điện thoại (mã QR)") { screen = "pairing"; show() }, top = 8)
+        list.add(btn("🔑  Đổi mã PIN") { changingPin = true; first = null; msg = ""; show() }, top = 10)
+        list.add(btn("Khoá lại & thoát", Kind.DANGER) {
+            authed = false
+            Prefs.setSettingsUntil(this, 0)
+            home()
+        }, top = 22)
+        val sv = ScrollView(this)
+        sv.addView(list)
+        root.add(sv, w = 0, h = MATCH, weight = 1.15f)
+        return root
+    }
+
+    // ---------- Ghép đôi ----------
+    private fun pairingView(): View {
+        val code = Prefs.pairCode(this)
+        val root = row()
+        val qrBox = LinearLayout(this)
+        qrBox.background = shape(Color.WHITE, 20)
+        qrBox.setPadding(dp(16), dp(16), dp(16), dp(16))
+        val iv = ImageView(this)
+        iv.setImageBitmap(qr(code))
+        qrBox.addView(iv, LinearLayout.LayoutParams(dp(300), dp(300)))
+        val leftWrap = LinearLayout(this)
+        leftWrap.gravity = Gravity.CENTER
+        leftWrap.addView(qrBox)
+        root.add(leftWrap, w = 0, h = MATCH, weight = 1f)
+
+        val right = LinearLayout(this)
+        right.orientation = LinearLayout.VERTICAL
+        right.gravity = Gravity.CENTER_VERTICAL
+        right.setPadding(dp(32), 0, 0, 0)
+        right.add(txt("Ghép đôi với điện thoại", 32f, Pal.TEXT, true))
+        right.add(txt("1. Mở ứng dụng TV Guard Phụ huynh trên điện thoại.\n2. Bấm “Quét mã QR” và quét hình bên cạnh.\nKhông chia sẻ mã này cho trẻ.", 18f, Pal.MUTED), top = 10)
+        right.add(txt("Hoặc nhập tay mã:", 16f, Pal.MUTED), top = 14)
+        right.add(txt(Proto.pretty(code), 15f, Pal.TEXT), top = 4)
+        right.add(btn("Tạo mã mới (huỷ ghép đôi cũ)") { Prefs.resetPair(this); show() }, top = 18)
+        right.add(btn("Quay lại", Kind.GHOST) { screen = "settings"; show() }, top = 10)
+        root.add(right, w = 0, h = MATCH, weight = 1.2f)
+        return root
     }
 }
